@@ -1,1 +1,6 @@
 tags
+*.cmd
+*.ko
+Module.symvers
+*.o
+*.mod.*
