@@ -10,16 +10,16 @@
 
 #include "../common/vport.h"
 
-struct sockaddr_nl dest_addr;
-struct nlmsghdr *nlh = NULL;
-struct iovec iov;
-struct msghdr msg;
+#define MAX(a, b)   \
+    ({ int ___a = (a); int ___b = (b); ___a > ___b ? ___a : ___b; })
 
-static int vport_init(int *sock_fd)
+static int sock_fd = 0;
+
+static int vport_init()
 {
     struct sockaddr_nl src_addr = { 0 };
 
-    if ((*sock_fd = socket(PF_NETLINK, SOCK_RAW, NETLINK_VPORT)) < 0) {
+    if ((sock_fd = socket(PF_NETLINK, SOCK_RAW, NETLINK_VPORT)) < 0) {
         perror("Failed creating a netlink socket (module not in the kernel?)");
         return -1;
     }
@@ -27,32 +27,115 @@ static int vport_init(int *sock_fd)
     src_addr.nl_family = AF_NETLINK;
     src_addr.nl_pid = getpid();
 
-    if (bind(*sock_fd, (struct sockaddr *) &src_addr, sizeof(src_addr)) < 0) {
+    if (bind(sock_fd, (struct sockaddr *) &src_addr, sizeof(src_addr)) < 0) {
         perror("Failed binding");
-        close(*sock_fd);
+        close(sock_fd);
         return -1;
     }
 
     return 0;
 }
 
-static void add_port(char *port)
+static int communicate(struct nlmsghdr *nlh)
 {
-    return;
+    struct iovec iov = { 0 };
+    struct msghdr msg = { 0 };
+    struct sockaddr_nl dest_addr = { 0 };
+
+    dest_addr.nl_family = AF_NETLINK;
+    dest_addr.nl_pid = 0; /* For Linux Kernel */
+    dest_addr.nl_groups = 0; /* unicast */
+    iov.iov_base = (void *) nlh;
+    iov.iov_len = nlh->nlmsg_len;
+    msg.msg_name = (void *) &dest_addr;
+    msg.msg_namelen = sizeof(dest_addr);
+    msg.msg_iov = &iov;
+    msg.msg_iovlen = 1;
+
+    if (sendmsg(sock_fd, &msg, 0) < 0) {
+        perror("Failed sending message to the kernel");
+        return -1;
+    }
+    if (recvmsg(sock_fd, &msg, 0) < 0) {
+        perror("Failed receiving reply from the kernel");
+        return -1;
+    }
+
+    return 0;
 }
 
-static void remove_port(char *port)
+static struct nlmsghdr *alloc_nlmsghdr(int msglen)
 {
+    struct nlmsghdr *nlh = NULL;
+
+    if ((nlh = (struct nlmsghdr *) calloc(1, NLMSG_SPACE(msglen)))) {
+        nlh->nlmsg_len = NLMSG_SPACE(msglen);
+        nlh->nlmsg_pid = getpid();
+        nlh->nlmsg_flags = 0;
+    }
+
+    return nlh;
+}
+
+static int verify_port_name_len(char *port)
+{
+    if (strlen(port) >= IFNAMSIZ) {
+        printf("Port name %s is too long (should be no more than %d)\n", port, 
+                IFNAMSIZ - 1);
+        return -1;
+    }
+    return 0;
+}
+
+static void handle_ports(char *port1, char *port2, 
+        vport_action_type_t action)
+{
+    vport_request_t *req = NULL;
+    vport_reply_t *rep = NULL;
+    struct nlmsghdr *nlh = NULL;
+    int msglen = MAX(sizeof(*req), sizeof(*rep));
+
+    if (!port1 || verify_port_name_len(port1))
+        return;
+
+    nlh = alloc_nlmsghdr(msglen);
+    req = NLMSG_DATA(nlh);
+    req->action = action;
+    strcpy(req->ports[0], port1);
+    if (port2)
+        strcpy(req->ports[1], port2);
+
+    if (!communicate(nlh)) {
+        rep = (vport_reply_t *)NLMSG_DATA(nlh);
+        printf("Received code: %d\n", rep->err);
+    } else {
+        printf("Something went wrong when communicating with the kernel\n");
+    }
+
+    free(nlh);
     return;
 }
 
 static void connect_ports(char *ports)
 {
-    return;
-}
+    char *_ports = strdup(ports);
+    char *comma = strchr(_ports, ',');
+    char *port1 = NULL, *port2 = NULL;
 
-static void disconnect_ports(char *ports)
-{
+    if (!comma) {
+        printf("Ports need to be comma-separated %s\n", ports);
+        goto exit;
+    }
+
+    *comma = 0;
+    port1 = _ports;
+    port2 = comma;
+    port2++;
+    if (verify_port_name_len(port2))
+        goto exit;
+    handle_ports(port1, port2, VPORT_ACTION_TYPE_CONNECT);
+exit:
+    free(_ports);
     return;
 }
 
@@ -90,7 +173,6 @@ static void usage(void)
 int main(int argc, char *argv[])
 {
     int ret = 0;
-    int sock_fd = 0;
     int c;
 
     if ((ret = vport_init(&sock_fd)))
@@ -122,16 +204,18 @@ int main(int argc, char *argv[])
             printf("Unknown option %c\n", c);
             break;
         case 'a':
-            add_port(optarg);
-            break;
         case 'r':
-            remove_port(optarg);
-            break;
+        case 'd':
+            {
+                vport_action_type_t action = c == 'a' ? 
+                    VPORT_ACTION_TYPE_ADD : (c == 'r' ? 
+                            VPORT_ACTION_TYPE_REMOVE : 
+                            VPORT_ACTION_TYPE_DISCONNECT);
+                handle_ports(optarg, NULL, action);
+                break;
+            }
         case 'c':
             connect_ports(optarg);
-            break;
-        case 'd':
-            disconnect_ports(optarg);
             break;
         case 'D':
             dump_ports();
@@ -141,33 +225,6 @@ int main(int argc, char *argv[])
             break;
         }
     }
-    memset(&dest_addr, 0, sizeof (dest_addr));
-    dest_addr.nl_family = AF_NETLINK;
-    dest_addr.nl_pid = 0; /* For Linux Kernel */
-    dest_addr.nl_groups = 0; /* unicast */
-
-    nlh = (struct nlmsghdr *) malloc(NLMSG_SPACE(MAX_PAYLOAD));
-    memset(nlh, 0, NLMSG_SPACE(MAX_PAYLOAD));
-    nlh->nlmsg_len = NLMSG_SPACE(MAX_PAYLOAD);
-    nlh->nlmsg_pid = getpid();
-    nlh->nlmsg_flags = 0;
-
-    strcpy(NLMSG_DATA(nlh), "Hello");
-
-    iov.iov_base = (void *) nlh;
-    iov.iov_len = nlh->nlmsg_len;
-    msg.msg_name = (void *) &dest_addr;
-    msg.msg_namelen = sizeof(dest_addr);
-    msg.msg_iov = &iov;
-    msg.msg_iovlen = 1;
-
-    printf("Sending message to kernel\n");
-    sendmsg(sock_fd, &msg, 0);
-    printf("Waiting for message from kernel\n");
-
-    /* Read message from kernel */
-    recvmsg(sock_fd, &msg, 0);
-    printf("Received message payload: %s\n", (char *)NLMSG_DATA(nlh));
     close(sock_fd);
 
     return 0;

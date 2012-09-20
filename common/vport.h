@@ -18,9 +18,17 @@ typedef enum {
 typedef struct {
     vport_action_type_t action;
     char ports[2][IFNAMSIZ];
-} vport_message_t;
+} vport_request_t;
 
-/* Maximum payload size*/
-#define MAX_PAYLOAD 1024
+typedef enum {
+    VPORT_ERR_OK = 0,
+    VPORT_ERR_PORT_ALREADY_EXISTS = 1,
+    VPORT_ERR_UNKNOWN_ACTION = 2,
+    VPORT_ERR_MAX
+} vport_err_t;
+
+typedef struct {
+    vport_err_t err;
+} vport_reply_t;
 
 #endif /* __CONSTANTS_H__ */

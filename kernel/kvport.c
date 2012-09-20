@@ -8,43 +8,65 @@
 
 struct sock *nl_sk = NULL;
 
-static void hello_nl_recv_msg(struct sk_buff *skb) {
+static void vport_nl_recv_msg(struct sk_buff *skb) {
 
     struct nlmsghdr *nlh;
     int pid;
     struct sk_buff *skb_out;
     int msg_size;
-    char *msg = "Hello from kernel";
-    int res;
+    vport_request_t *req = NULL;
+    vport_reply_t *rep = NULL;
+    vport_err_t rc = VPORT_ERR_OK;
 
-    printk(KERN_INFO "Entering: %s\n", __FUNCTION__);
+    msg_size = sizeof(vport_reply_t);
 
-    msg_size = strlen(msg);
-
-    nlh = (struct nlmsghdr*)skb->data;
-    printk(KERN_INFO "Netlink received msg payload: %s\n",(char*)nlmsg_data(nlh));
+    nlh = (struct nlmsghdr *) skb->data;
     pid = nlh->nlmsg_pid; /*pid of sending process */
 
+    req = (vport_request_t *) nlmsg_data(nlh);
+    switch (req->action) {
+    case VPORT_ACTION_TYPE_ADD:
+        printk("Adding port %s\n", req->ports[0]);
+        rc = VPORT_ERR_OK;
+        break;
+    case VPORT_ACTION_TYPE_REMOVE:
+        printk("Removing port %s\n", req->ports[0]);
+        rc = VPORT_ERR_OK;
+        break;
+    case VPORT_ACTION_TYPE_CONNECT:
+        printk("Connecting ports %s<-->%s\n", req->ports[0], req->ports[1]);
+        rc = VPORT_ERR_OK;
+        break;
+    case VPORT_ACTION_TYPE_DISCONNECT:
+        printk("Disconnecting port %s\n", req->ports[0]);
+        rc = VPORT_ERR_OK;
+        break;
+    case VPORT_ACTION_TYPE_DUMP:
+        printk("Dumping\n");
+        rc = VPORT_ERR_OK;
+        break;
+    default:
+        rc = VPORT_ERR_UNKNOWN_ACTION;
+        break;
+    }
     skb_out = nlmsg_new(msg_size, 0);
-
     if(!skb_out) {
         printk(KERN_ERR "Failed to allocate new skb\n");
         return;
     } 
-    nlh = nlmsg_put(skb_out, 0, 0, NLMSG_DONE, msg_size, 0);  
-    NETLINK_CB(skb_out).dst_group = 0; /* not in mcast group */
-    strncpy(nlmsg_data(nlh), msg, msg_size);
+    nlh = nlmsg_put(skb_out, 0, 0, NLMSG_DONE, msg_size, 0);
+    NETLINK_CB(skb_out).dst_group = 0;
+    rep = (vport_reply_t *) nlmsg_data(nlh);
+    rep->err = rc;
 
-    res = nlmsg_unicast(nl_sk, skb_out, pid);
-
-    if(res < 0)
+    if(nlmsg_unicast(nl_sk, skb_out, pid) < 0)
         printk(KERN_INFO "Error while sending bak to user\n");
 }
 
-static int __init hello_init(void) {
+static int __init kvport_init(void) {
 
     printk("Entering: %s\n",__FUNCTION__);
-    nl_sk = netlink_kernel_create(&init_net, NETLINK_VPORT, 0, hello_nl_recv_msg,
+    nl_sk = netlink_kernel_create(&init_net, NETLINK_VPORT, 0, vport_nl_recv_msg,
             NULL, THIS_MODULE);
     if(!nl_sk)
     {
@@ -55,14 +77,14 @@ static int __init hello_init(void) {
     return 0;
 }
 
-static void __exit hello_exit(void) 
+static void __exit kvport_exit(void) 
 {
-    printk(KERN_INFO "exiting hello module\n");
+    printk(KERN_INFO "exiting kvport module\n");
     netlink_kernel_release(nl_sk);
 }
 
-module_init(hello_init);
-module_exit(hello_exit);
+module_init(kvport_init);
+module_exit(kvport_exit);
 
 MODULE_LICENSE("GPL");
 
