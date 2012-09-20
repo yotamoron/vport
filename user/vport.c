@@ -15,7 +15,7 @@
 
 static int sock_fd = 0;
 
-static int vport_init()
+static int vport_init(void)
 {
     struct sockaddr_nl src_addr = { 0 };
 
@@ -80,8 +80,8 @@ static struct nlmsghdr *alloc_nlmsghdr(int msglen)
 static int verify_port_name_len(char *port)
 {
     if (strlen(port) >= IFNAMSIZ) {
-        printf("Port name %s is too long (should be no more than %d)\n", port, 
-                IFNAMSIZ - 1);
+        printf("Port name %s is too long (should be no more than %d "
+                "characters)\n", port, IFNAMSIZ - 1);
         return -1;
     }
     return 0;
@@ -123,7 +123,7 @@ static void connect_ports(char *ports)
     char *port1 = NULL, *port2 = NULL;
 
     if (!comma) {
-        printf("Ports need to be comma-separated %s\n", ports);
+        printf("Ports need to be comma-separated '%s'\n", ports);
         goto exit;
     }
 
@@ -175,7 +175,7 @@ int main(int argc, char *argv[])
     int ret = 0;
     int c;
 
-    if ((ret = vport_init(&sock_fd)))
+    if ((ret = vport_init()))
         return ret;
 
     while (1)
