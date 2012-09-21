@@ -40,6 +40,7 @@ typedef enum {
     VPORT_ERR_OK = 0,
     VPORT_ERR_PORT_ALREADY_EXISTS = 1,
     VPORT_ERR_UNKNOWN_ACTION = 2,
+    VPORT_ERR_CANNOT_REGISTER_DEVICE = 3,
     VPORT_ERR_MAX
 } vport_err_t;
 

@@ -24,7 +24,7 @@
 #include <unistd.h>
 #include <getopt.h>
 
-#include "../common/vport.h"
+#include "../kernel/vport.h"
 
 #define MAX(a, b)   \
     ({ int ___a = (a); int ___b = (b); ___a > ___b ? ___a : ___b; })
