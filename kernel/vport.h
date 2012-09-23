@@ -49,6 +49,7 @@ typedef enum {
 
 typedef struct {
     vport_err_t err;
+    char port[IFNAMSIZ];
 } vport_reply_t;
 
 #endif /* __CONSTANTS_H__ */

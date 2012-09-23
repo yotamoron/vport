@@ -55,8 +55,25 @@ static netdev_tx_t vport_xmit(struct sk_buff *skb, struct net_device *dev)
 	return NETDEV_TX_OK;
 }
 
+static int vport_set_mac(struct net_device *dev, void *p)
+{
+	struct sockaddr *addr = p;
+
+	if (!is_valid_ether_addr(addr->sa_data))
+		return -EADDRNOTAVAIL;
+
+	if (netif_running(dev))
+		return -EBUSY;
+
+	memcpy(dev->dev_addr, addr->sa_data, dev->addr_len);
+	dev->addr_assign_type &= ~NET_ADDR_RANDOM;
+
+        return 0;
+}
+
 static const struct net_device_ops vport_ops = {
 	.ndo_start_xmit         = vport_xmit,
+        .ndo_set_mac_address    = vport_set_mac,
 };
 
 static void vport_setup(struct net_device *dev)
@@ -64,16 +81,11 @@ static void vport_setup(struct net_device *dev)
         ether_setup(dev);
 	dev->mtu		= (16 * 1024) + 20 + 20 + 12;
 	dev->tx_queue_len	= 0;
+	dev->priv_flags	       &= ~IFF_XMIT_DST_RELEASE;
 	dev->hw_features	= NETIF_F_ALL_TSO | NETIF_F_UFO;
-	dev->features 		= NETIF_F_SG | NETIF_F_FRAGLIST
-		| NETIF_F_ALL_TSO
-		| NETIF_F_UFO
-		| NETIF_F_HW_CSUM
-		| NETIF_F_RXCSUM
-		| NETIF_F_HIGHDMA
-		| NETIF_F_LLTX
-		| NETIF_F_NETNS_LOCAL
-		| NETIF_F_VLAN_CHALLENGED;
+        random_ether_addr(dev->perm_addr);
+        memcpy(dev->dev_addr, dev->perm_addr, sizeof(dev->dev_addr));
+	dev->addr_assign_type |= NET_ADDR_RANDOM;
 	dev->ethtool_ops	= &vport_ethtool_ops;
 	dev->netdev_ops		= &vport_ops;
 }
@@ -134,9 +146,32 @@ static vport_err_t vport_connect(char *p1, char *p2)
         }
         vp1 = to_vport_priv(dev1);
         vp2 = to_vport_priv(dev2);
+        if (vp1->other || vp2->other) {
+                dev_put(dev1);
+                dev_put(dev2);
+                return VPORT_ERR_DEVICE_BUSY;
+        }
+        netif_carrier_on(dev1);
+        netif_carrier_on(dev2);
         vp1->other = dev2;
         vp2->other = dev1;
 
+        return VPORT_ERR_OK;
+}
+
+static vport_err_t dump_port(char *p1, char *to)
+{
+        struct net_device *dev;
+        struct vport_priv *vp;
+
+        dev = dev_get_by_name(&init_net, p1);
+        if (!dev)
+                return VPORT_ERR_OK;
+        vp = to_vport_priv(dev);
+        if (vp->other) {
+                memcpy(to, vp->other->name, sizeof(vp->other->name));
+        }
+        dev_put(dev);
         return VPORT_ERR_OK;
 }
 
@@ -157,8 +192,10 @@ static vport_err_t vport_disconnect(char *name)
         dev2 = vp1->other;
         vp2 = to_vport_priv(dev2);
         vp1->other = NULL;
+        netif_carrier_off(dev2);
         dev_put(dev2);
         vp2->other = NULL;
+        netif_carrier_off(dev1);
         dev_put(dev1);
 
         return VPORT_ERR_OK;
@@ -173,6 +210,7 @@ static void vport_nl_recv_msg(struct sk_buff *skb) {
         vport_request_t *req = NULL;
         vport_reply_t *rep = NULL;
         vport_err_t rc = VPORT_ERR_OK;
+        char port[IFNAMSIZ] = { 0 };
 
         msg_size = sizeof(vport_reply_t);
 
@@ -200,7 +238,7 @@ static void vport_nl_recv_msg(struct sk_buff *skb) {
                 break;
         case VPORT_ACTION_TYPE_DUMP:
                 printk("Dumping\n");
-                rc = VPORT_ERR_OK;
+                rc = dump_port(req->ports[0], port);
                 break;
         default:
                 rc = VPORT_ERR_UNKNOWN_ACTION;
@@ -215,6 +253,7 @@ static void vport_nl_recv_msg(struct sk_buff *skb) {
         NETLINK_CB(skb_out).dst_group = 0;
         rep = (vport_reply_t *) nlmsg_data(nlh);
         rep->err = rc;
+        memcpy(rep->port, port, sizeof(port));
 
         if(nlmsg_unicast(nl_sk, skb_out, pid) < 0)
                 printk(KERN_INFO "Error while sending reply to user\n");

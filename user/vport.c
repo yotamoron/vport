@@ -103,6 +103,18 @@ static int verify_port_name_len(char *port)
     return 0;
 }
 
+#define ERR_E2S(e)      \
+        [e] = #e
+static char *err2str[VPORT_ERR_MAX] = {
+    ERR_E2S(VPORT_ERR_OK),
+    ERR_E2S(VPORT_ERR_PORT_ALREADY_EXISTS),
+    ERR_E2S(VPORT_ERR_UNKNOWN_ACTION),
+    ERR_E2S(VPORT_ERR_CANNOT_REGISTER_DEVICE),
+    ERR_E2S(VPORT_ERR_NO_SUCH_DEVICE),
+    ERR_E2S(VPORT_ERR_DEVICE_BUSY),
+    ERR_E2S(VPORT_ERR_NO_MEM),
+};
+
 static void handle_ports(char *port1, char *port2, 
         vport_action_type_t action)
 {
@@ -123,7 +135,8 @@ static void handle_ports(char *port1, char *port2,
 
     if (!communicate(nlh)) {
         rep = (vport_reply_t *)NLMSG_DATA(nlh);
-        printf("Received code: %d\n", rep->err);
+        printf("%s(%d) %s\n", err2str[rep->err], rep->err,
+                        rep->port[0] ? rep->port : "");
     } else {
         printf("Something went wrong when communicating with the kernel\n");
     }
@@ -155,9 +168,9 @@ exit:
     return;
 }
 
-static void dump_ports(void)
+static void dump_ports(char *name)
 {
-    return;
+        handle_ports(name, NULL, VPORT_ACTION_TYPE_DUMP);
 }
 
 static void usage(void)
@@ -174,8 +187,8 @@ static void usage(void)
          "\t-d|--disconnect-port <Port name>:\n"
              "\t\tDisconnect a port (will also automatically disconnect the \n"
              "\t\tport that was connected to the port\n"
-         "\t-D|--dump:\n"
-             "\t\tDump info about ports\n"
+         "\t-D|--dump <Port name>:\n"
+             "\t\tDump info about a port\n"
          "\t-h|--help:\n"
             "\t\tDisplay this help and exit\n\n"
          "\tThere is no mutual exclusion of any kind between the options, the \n"
@@ -202,13 +215,13 @@ int main(int argc, char *argv[])
             {"remove-port", required_argument, 0, 'r'},
             {"connect-ports", required_argument, 0, 'c'},
             {"disconnect-port", required_argument, 0, 'd'},
-            {"dump", no_argument, 0, 'D'},
+            {"dump", required_argument, 0, 'D'},
             {"help", no_argument, 0, 'h'},
             {0, 0, 0, 0}
         };
         int option_index = 0;
 
-        c = getopt_long(argc, argv, "a:r:c:d:Dh", long_options, &option_index);
+        c = getopt_long(argc, argv, "a:r:c:d:D:h", long_options, &option_index);
 
         /* Detect the end of the options. */
         if (c == -1)
@@ -234,7 +247,7 @@ int main(int argc, char *argv[])
             connect_ports(optarg);
             break;
         case 'D':
-            dump_ports();
+            dump_ports(optarg);
             break;
         case 'h':
             usage();
