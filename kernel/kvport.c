@@ -26,26 +26,11 @@
 #include <linux/if_arp.h>
 
 struct vport_priv {
-        struct list_head ports;
-        struct net_device *this;
         struct net_device *other;
 };
 
 #define to_vport_priv(dev) ((struct vport_priv *)netdev_priv(dev))
 struct sock *nl_sk = NULL;
-
-LIST_HEAD(vport_list);
-
-static struct net_device *vport_get_by_name(char *name)
-{
-        struct vport_priv *vp;
-
-        list_for_each_entry(vp, &vport_list, ports) {
-                if (!strcmp(vp->this->name, name))
-                        return vp->this;
-        }
-        return NULL;
-}
 
 static u32 always_on(struct net_device *dev)
 {
@@ -74,22 +59,11 @@ static const struct net_device_ops vport_ops = {
 	.ndo_start_xmit         = vport_xmit,
 };
 
-static void vport_dev_free(struct net_device *dev)
-{
-        struct vport_priv *vp = to_vport_priv(dev);
-
-        list_del(&vp->ports);        
-        free_netdev(dev);
-}
-
 static void vport_setup(struct net_device *dev)
 {
+        ether_setup(dev);
 	dev->mtu		= (16 * 1024) + 20 + 20 + 12;
-	dev->hard_header_len	= ETH_HLEN;
-	dev->addr_len		= ETH_ALEN;
 	dev->tx_queue_len	= 0;
-	dev->type		= ARPHRD_ETHER;
-	dev->priv_flags	       &= ~IFF_XMIT_DST_RELEASE;
 	dev->hw_features	= NETIF_F_ALL_TSO | NETIF_F_UFO;
 	dev->features 		= NETIF_F_SG | NETIF_F_FRAGLIST
 		| NETIF_F_ALL_TSO
@@ -101,9 +75,7 @@ static void vport_setup(struct net_device *dev)
 		| NETIF_F_NETNS_LOCAL
 		| NETIF_F_VLAN_CHALLENGED;
 	dev->ethtool_ops	= &vport_ethtool_ops;
-	dev->header_ops		= &eth_header_ops;
 	dev->netdev_ops		= &vport_ops;
-	dev->destructor		= vport_dev_free;
 }
 
 static vport_err_t vport_add(char *vport_name)
@@ -111,20 +83,83 @@ static vport_err_t vport_add(char *vport_name)
         struct net_device *dev;
         struct vport_priv *vp;
 
-        if (vport_get_by_name(vport_name))
-                return VPORT_ERR_PORT_ALREADY_EXISTS;
-
         dev = alloc_netdev(sizeof(struct vport_priv), vport_name, vport_setup);
+        if (!dev)
+                return VPORT_ERR_NO_MEM;
         if (register_netdev(dev)) {
                 free_netdev(dev);
                 return VPORT_ERR_CANNOT_REGISTER_DEVICE;
         }
 
         vp = to_vport_priv(dev);
-        INIT_LIST_HEAD(&vp->ports);
-        list_add(&vport_list, &vp->ports);
-        vp->this = dev;
         vp->other = NULL;
+
+        return VPORT_ERR_OK;
+}
+
+static vport_err_t vport_remove(char *name)
+{
+        struct vport_priv *vp;
+        struct net_device *dev;
+
+        dev = dev_get_by_name(&init_net, name);
+        if (!dev)
+                return VPORT_ERR_NO_SUCH_DEVICE;
+        vp = to_vport_priv(dev);
+        if (vp->other) {
+                dev_put(dev);
+                return VPORT_ERR_DEVICE_BUSY;
+        }
+
+        dev_put(dev);
+	rtnl_lock();
+        unregister_netdevice(dev);
+	rtnl_unlock();
+        free_netdev(dev);
+        return VPORT_ERR_OK;
+}
+
+static vport_err_t vport_connect(char *p1, char *p2)
+{
+        struct net_device *dev1, *dev2;
+        struct vport_priv *vp1, *vp2;
+
+        dev1 = dev_get_by_name(&init_net, p1);
+        if (!dev1)
+                return VPORT_ERR_NO_SUCH_DEVICE;
+        dev2 = dev_get_by_name(&init_net, p2);
+        if (!dev2) {
+                dev_put(dev1);
+                return VPORT_ERR_NO_SUCH_DEVICE;
+        }
+        vp1 = to_vport_priv(dev1);
+        vp2 = to_vport_priv(dev2);
+        vp1->other = dev2;
+        vp2->other = dev1;
+
+        return VPORT_ERR_OK;
+}
+
+static vport_err_t vport_disconnect(char *name)
+{
+        struct vport_priv *vp1, *vp2;
+        struct net_device *dev1, *dev2;
+
+        dev1 = dev_get_by_name(&init_net, name);
+        if (!dev1)
+                return VPORT_ERR_NO_SUCH_DEVICE;
+        vp1 = to_vport_priv(dev1);
+        dev_put(dev1);
+        if (!vp1->other) {
+                dev_put(dev1);
+                return VPORT_ERR_OK;
+        }
+        dev2 = vp1->other;
+        vp2 = to_vport_priv(dev2);
+        vp1->other = NULL;
+        dev_put(dev2);
+        vp2->other = NULL;
+        dev_put(dev1);
 
         return VPORT_ERR_OK;
 }
@@ -152,16 +187,16 @@ static void vport_nl_recv_msg(struct sk_buff *skb) {
                 break;
         case VPORT_ACTION_TYPE_REMOVE:
                 printk("Removing port %s\n", req->ports[0]);
-                rc = VPORT_ERR_OK;
+                rc = vport_remove(req->ports[0]);
                 break;
         case VPORT_ACTION_TYPE_CONNECT:
                 printk("Connecting ports %s<-->%s\n", req->ports[0], 
                         req->ports[1]);
-                rc = VPORT_ERR_OK;
+                rc = vport_connect(req->ports[0], req->ports[1]);
                 break;
         case VPORT_ACTION_TYPE_DISCONNECT:
                 printk("Disconnecting port %s\n", req->ports[0]);
-                rc = VPORT_ERR_OK;
+                rc = vport_disconnect(req->ports[0]);
                 break;
         case VPORT_ACTION_TYPE_DUMP:
                 printk("Dumping\n");
