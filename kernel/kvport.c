@@ -263,7 +263,6 @@ static void vport_nl_recv_msg(struct sk_buff *skb) {
 
 static int __init kvport_init(void)
 {
-        printk("Entering: %s\n",__FUNCTION__);
         nl_sk = netlink_kernel_create(&init_net, NETLINK_VPORT, 0, 
                         vport_nl_recv_msg, NULL, THIS_MODULE);
         if(!nl_sk) {
@@ -276,7 +275,6 @@ static int __init kvport_init(void)
 
 static void __exit kvport_exit(void) 
 {
-        printk(KERN_INFO "exiting kvport module\n");
         netlink_kernel_release(nl_sk);
 }
 
